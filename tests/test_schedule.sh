@@ -111,6 +111,14 @@ assert out 1 21 59 "$S" "月 21:59 は窓の直前"
 echo "in_schedule: 制限なし"
 assert in 7 03 00 "" "空文字なら常に窓の中"
 
+echo "in_schedule: 空白や区切りの揺れ"
+assert in 1 12 00 "  1-5   09:00-22:00  " "前後と途中の余分な空白"
+assert in 1 12 00 "1-5 09:00-22:00;" "末尾に余分なセミコロン"
+assert in 1 12 00 ";;1-5 09:00-22:00" "先頭に空のエントリ"
+assert in 6 12 00 "1-5 09:00-22:00 ; 6 10:00-18:00" "セミコロンの前後に空白"
+assert out 1 12 00 "1-5" "時間範囲がない不正なエントリは無視"
+assert out 1 12 00 "garbage" "解釈できない文字列は無視"
+
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

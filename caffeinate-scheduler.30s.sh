@@ -104,47 +104,58 @@ hhmm_to_min() {
 }
 
 # 現在が $SCHEDULE のいずれかの窓の中なら 0 を返す
+#
+# 注意: ここではコマンド置換 $( ) を使わないこと。macOS 標準の bash 3.2 には
+# $( ) の中に書いた case のパターンの ) をコマンド置換の終端と誤認するバグがあり、
+# 構文エラーになる。ついでに for なら return がそのまま使えてサブシェルも不要。
 in_schedule() {
     [ -z "${SCHEDULE:-}" ] && return 0
 
-    local dow now_min prev result
+    local dow now_min prev entry days range fmin tmin old_ifs
     dow="$(date +%u)"
     now_min=$((10#$(date +%H) * 60 + 10#$(date +%M)))
     prev=$((dow == 1 ? 7 : dow - 1))
 
-    result="$(printf '%s\n' "$SCHEDULE" | tr ';' '\n' | while IFS= read -r entry; do
-        entry="$(printf '%s' "$entry" | tr -s ' ' | sed 's/^ //; s/ $//')"
-        [ -z "$entry" ] && continue
+    old_ifs="$IFS"
+    IFS=';'
+    for entry in $SCHEDULE; do
+        IFS="$old_ifs"
 
-        days="${entry%% *}"
-        range="${entry##* }"
-        case "$range" in
-            *-*) : ;;
-            *) continue ;;
-        esac
+        # 既定の IFS による単語分割で "曜日 開始-終了" に分ける。
+        # 前後や途中の余分な空白はこれで自動的に落ちる。
+        # shellcheck disable=SC2086  # 意図的に単語分割する
+        set -- $entry
+        days="${1:-}"
+        range="${2:-}"
 
-        fmin="$(hhmm_to_min "${range%%-*}")"
-        tmin="$(hhmm_to_min "${range##*-}")"
+        if [ -n "$days" ] && [ "${range%%-*}" != "$range" ]; then
+            fmin="$(hhmm_to_min "${range%%-*}")"
+            tmin="$(hhmm_to_min "${range##*-}")"
 
-        if [ "$fmin" -le "$tmin" ]; then
-            if day_match "$dow" "$days" && [ "$now_min" -ge "$fmin" ] && [ "$now_min" -lt "$tmin" ]; then
-                echo yes
-                break
-            fi
-        else
-            # 日をまたぐ窓
-            if day_match "$dow" "$days" && [ "$now_min" -ge "$fmin" ]; then
-                echo yes
-                break
-            fi
-            if day_match "$prev" "$days" && [ "$now_min" -lt "$tmin" ]; then
-                echo yes
-                break
+            if [ "$fmin" -le "$tmin" ]; then
+                if day_match "$dow" "$days" &&
+                    [ "$now_min" -ge "$fmin" ] && [ "$now_min" -lt "$tmin" ]; then
+                    IFS="$old_ifs"
+                    return 0
+                fi
+            else
+                # 日をまたぐ窓
+                if day_match "$dow" "$days" && [ "$now_min" -ge "$fmin" ]; then
+                    IFS="$old_ifs"
+                    return 0
+                fi
+                if day_match "$prev" "$days" && [ "$now_min" -lt "$tmin" ]; then
+                    IFS="$old_ifs"
+                    return 0
+                fi
             fi
         fi
-    done)"
 
-    [ "$result" = "yes" ]
+        IFS=';'
+    done
+
+    IFS="$old_ifs"
+    return 1
 }
 
 # tests/ から関数だけを読み込むためのフック

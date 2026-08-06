@@ -90,11 +90,22 @@ State lives in `$SWIFTBAR_PLUGIN_DATA_PATH` (mode, override deadline, PID of the
 ## Development
 
 ```bash
-./tests/test_schedule.sh   # schedule parsing and window matching
+./tests/test_schedule.sh                       # schedule parsing and window matching
+./tests/lint_bash32.py *.sh tests/*.sh         # bash 3.2 compatibility
 shellcheck -x *.sh tests/*.sh
+shfmt -d -i 4 -ci *.sh tests/*.sh
 ```
 
 The plugin can be sourced with `CAFFEINATE_SCHEDULER_LIB_ONLY=1` to load only the pure functions, which is how the tests inject a fake clock.
+
+### Target bash 3.2, not your bash
+
+macOS still ships bash **3.2.57** (2007) as `/bin/bash`, and SwiftBar runs plugins through it. Anything written against bash 4 or 5 will pass locally on a Homebrew bash and then break for every user. Two footguns that have already bitten this repo:
+
+- **`case` inside `$( )`.** The 3.2 parser mistakes the `)` that closes a case pattern for the end of the command substitution, and you get `syntax error near unexpected token 'newline'`. Restructure to avoid the substitution, or write the pattern as `(*-*)` so the parens balance.
+- **Nested quoted parameter expansion** such as `${v#"${v%%[![:space:]]*}"}`. Use word splitting instead.
+
+`tests/lint_bash32.py` checks for these and for bash 4-only features. The `macos-latest` CI job is the real backstop — its `/bin/bash` is 3.2.
 
 ## License
 
