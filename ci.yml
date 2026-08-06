@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck
+        run: shellcheck -x ./*.sh tests/*.sh
+
+  format:
+    name: shfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shfmt
+        run: |
+          curl -sSfL -o /usr/local/bin/shfmt \
+            https://github.com/mvdan/sh/releases/download/v3.10.0/shfmt_v3.10.0_linux_amd64
+          chmod +x /usr/local/bin/shfmt
+      - name: Check formatting
+        run: shfmt -d -i 4 -ci ./*.sh tests/*.sh
+
+  test:
+    name: Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run schedule tests
+        run: ./tests/test_schedule.sh
+      - name: Smoke test the plugin output
+        run: |
+          set -euo pipefail
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/config"
+          export SWIFTBAR_PLUGIN_DATA_PATH="$RUNNER_TEMP/state"
+          out="$(./caffeinate-scheduler.30s.sh </dev/null)"
+          printf '%s\n' "$out"
+          # ヘッダとセパレータが出ていること
+          printf '%s\n' "$out" | grep -q -- '---'
+          # 既定の設定ファイルが生成されていること
+          test -f "$XDG_CONFIG_HOME/caffeinate-scheduler/config.sh"
