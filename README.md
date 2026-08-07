@@ -26,7 +26,7 @@ Originally built for [Claude Code](https://code.claude.com) Remote Control sessi
 
 ```bash
 curl -o "$(defaults read com.ameba.SwiftBar PluginDirectory)/caffeinate-scheduler.30s.sh" \
-  https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/swiftbar-caffeinate-scheduler/main/caffeinate-scheduler.30s.sh
+  https://raw.githubusercontent.com/take-m/swiftbar-caffeinate-scheduler/main/caffeinate-scheduler.30s.sh
 chmod +x "$(defaults read com.ameba.SwiftBar PluginDirectory)/caffeinate-scheduler.30s.sh"
 ```
 
