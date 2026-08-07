@@ -6,29 +6,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-07
+
+### Added
+
+- English and Japanese menu strings, selected by the new `UI_LANGUAGE` config
+  option (`auto` / `en` / `ja`). `auto` follows the macOS system locale
+- `tests/test_i18n.py`, which verifies that every translation catalogue has
+  matching keys and matching `printf` format specifiers, and that no key is
+  defined but unused
+- `CLAUDE.md`, documenting the constraints that are easy to violate silently
+
+### Changed
+
+- The generated default config file is now commented in English
+- Source comments, test descriptions and tooling output are now in English.
+  The Japanese menu catalogue is unaffected
+
+### Security
+
+- CI runs with `permissions: contents: read`, actions are pinned to full commit
+  SHAs, `persist-credentials` is disabled, and the downloaded `shfmt` binary is
+  checksum-verified
+
 ## [1.0.0] - 2026-08-06
 
 ### Added
 
-- Prevent sleep while a watched process is running, restricted to configured weekday/time windows
+- Prevent sleep while a watched process is running, restricted to configured
+  weekday and time windows
 - Auto / always-on / always-off modes, switchable from the menu
 - One-off 1-hour and 3-hour overrides
 - Grace period after the watched process exits
-- Detection of `caffeinate` processes started outside the plugin, with an option to stop them
+- Detection of `caffeinate` processes started outside the plugin, with an
+  option to stop them
 - SF Symbol icons under SwiftBar, emoji fallback under xbar
-- Test suite for schedule parsing with an injectable clock
+- Test suite for schedule parsing with an injectable clock, plus coverage for
+  malformed and whitespace-heavy schedule strings
+- `tests/lint_bash32.py`, a static check for bash 3.2 incompatibilities
 
 ### Fixed
 
 - Schedule evaluation raised a syntax error on macOS's stock bash 3.2, which
   misparses a `case` pattern's closing paren inside `$( )` as the end of the
   command substitution. `in_schedule` no longer uses a command substitution or
-  a subshell at all.
+  a subshell at all
 - Replaced nested quoted parameter expansion in whitespace trimming with plain
-  word splitting, for the same compatibility reason.
-
-### Added
-
-- `tests/lint_bash32.py`, a static check for bash 3.2 incompatibilities, wired
-  into CI
-- Test coverage for malformed and whitespace-heavy schedule strings
+  word splitting, for the same compatibility reason

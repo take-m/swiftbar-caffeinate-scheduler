@@ -1,9 +1,14 @@
 #!/bin/bash
 #
-# スケジュール判定ロジックのテスト。
-# date を関数で差し替えて任意の日時を注入する。
+# Tests for the schedule logic.
+#
+# `date` is replaced with a shell function so any weekday and time can be
+# injected without touching the system clock.
 #
 #   ./tests/test_schedule.sh
+#
+# Run it with /bin/bash explicitly to exercise bash 3.2, which is what macOS
+# ships and therefore what SwiftBar runs the plugin under.
 #
 set -u
 
@@ -15,7 +20,7 @@ trap 'rm -rf "$TMP"' EXIT
 export XDG_CONFIG_HOME="$TMP/config"
 export SWIFTBAR_PLUGIN_DATA_PATH="$TMP/state"
 
-# 関数だけを読み込む
+# Load only the pure functions, not the plugin body.
 export CAFFEINATE_SCHEDULER_LIB_ONLY=1
 # shellcheck source=/dev/null
 . "$PLUGIN"
@@ -23,7 +28,7 @@ export CAFFEINATE_SCHEDULER_LIB_ONLY=1
 PASS=0
 FAIL=0
 
-# 注入する現在時刻
+# The clock to inject.
 MOCK_DOW=1
 MOCK_HH=12
 MOCK_MM=00
@@ -37,11 +42,11 @@ date() {
     esac
 }
 
-# assert <期待 in|out> <曜日> <時> <分> <スケジュール> <説明>
+# assert <in|out> <weekday> <hour> <minute> <schedule> <description>
 assert() {
     local expect="$1" dow="$2" hh="$3" mm="$4" sched="$5" desc="$6"
     MOCK_DOW="$dow" MOCK_HH="$hh" MOCK_MM="$mm"
-    # shellcheck disable=SC2034  # in_schedule が参照する
+    # shellcheck disable=SC2034  # in_schedule reads this
     SCHEDULE="$sched"
 
     local actual="out"
@@ -71,7 +76,7 @@ done
 
 echo "day_match"
 for c in "1 1-5 0" "5 1-5 0" "6 1-5 1" "7 1-5,7 0" "3 1,3,5 0" "4 1,3,5 1"; do
-    # shellcheck disable=SC2086  # 意図的に単語分割する
+    # shellcheck disable=SC2086  # splitting the fixture is the point
     set -- $c
     if day_match "$1" "$2"; then got=0; else got=1; fi
     if [ "$got" = "$3" ]; then
@@ -83,41 +88,41 @@ for c in "1 1-5 0" "5 1-5 0" "6 1-5 1" "7 1-5,7 0" "3 1,3,5 0" "4 1,3,5 1"; do
     fi
 done
 
-echo "in_schedule: 平日 09:00-22:00"
+echo "in_schedule: weekdays 09:00-22:00"
 S="1-5 09:00-22:00"
-assert out 1 08 59 "$S" "月 08:59 は窓の直前"
-assert in 1 09 00 "$S" "月 09:00 は開始ちょうど"
-assert in 3 15 30 "$S" "水 15:30 は窓の中"
-assert out 5 22 00 "$S" "金 22:00 は終了ちょうど（含まない）"
-assert out 6 15 00 "$S" "土 15:30 は対象曜日外"
-assert out 7 12 00 "$S" "日は対象曜日外"
+assert out 1 08 59 "$S" "Mon 08:59 is just before the window"
+assert in 1 09 00 "$S" "Mon 09:00 is the exact start"
+assert in 3 15 30 "$S" "Wed 15:30 is inside"
+assert out 5 22 00 "$S" "Fri 22:00 is the exact end, exclusive"
+assert out 6 15 00 "$S" "Sat 15:00 is not a listed weekday"
+assert out 7 12 00 "$S" "Sun is not a listed weekday"
 
-echo "in_schedule: 複数の窓"
+echo "in_schedule: multiple windows"
 S="1-5 09:00-22:00; 6 10:00-18:00"
-assert in 6 12 00 "$S" "土 12:00 は 2 つ目の窓"
-assert out 6 09 00 "$S" "土 09:00 はまだ窓の外"
-assert in 2 20 00 "$S" "火 20:00 は 1 つ目の窓"
-assert out 7 12 00 "$S" "日はどの窓にも入らない"
+assert in 6 12 00 "$S" "Sat 12:00 matches the second window"
+assert out 6 09 00 "$S" "Sat 09:00 is before the second window"
+assert in 2 20 00 "$S" "Tue 20:00 matches the first window"
+assert out 7 12 00 "$S" "Sun matches neither window"
 
-echo "in_schedule: 日をまたぐ窓 (22:00-02:00)"
+echo "in_schedule: window wrapping past midnight (22:00-02:00)"
 S="1-5 22:00-02:00"
-assert in 1 23 30 "$S" "月 23:30 は開始日の側"
-assert in 2 01 00 "$S" "火 01:00 は月曜の窓の続き"
-assert out 2 03 00 "$S" "火 03:00 は窓を過ぎている"
-assert in 6 01 00 "$S" "土 01:00 は金曜の窓の続き"
-assert out 6 23 00 "$S" "土 23:00 は対象曜日外"
-assert out 1 21 59 "$S" "月 21:59 は窓の直前"
+assert in 1 23 30 "$S" "Mon 23:30 is on the opening side"
+assert in 2 01 00 "$S" "Tue 01:00 continues Monday's window"
+assert out 2 03 00 "$S" "Tue 03:00 is past the window"
+assert in 6 01 00 "$S" "Sat 01:00 continues Friday's window"
+assert out 6 23 00 "$S" "Sat 23:00 is not a listed weekday"
+assert out 1 21 59 "$S" "Mon 21:59 is just before the window"
 
-echo "in_schedule: 制限なし"
-assert in 7 03 00 "" "空文字なら常に窓の中"
+echo "in_schedule: no restriction"
+assert in 7 03 00 "" "an empty schedule always matches"
 
-echo "in_schedule: 空白や区切りの揺れ"
-assert in 1 12 00 "  1-5   09:00-22:00  " "前後と途中の余分な空白"
-assert in 1 12 00 "1-5 09:00-22:00;" "末尾に余分なセミコロン"
-assert in 1 12 00 ";;1-5 09:00-22:00" "先頭に空のエントリ"
-assert in 6 12 00 "1-5 09:00-22:00 ; 6 10:00-18:00" "セミコロンの前後に空白"
-assert out 1 12 00 "1-5" "時間範囲がない不正なエントリは無視"
-assert out 1 12 00 "garbage" "解釈できない文字列は無視"
+echo "in_schedule: whitespace and separator noise"
+assert in 1 12 00 "  1-5   09:00-22:00  " "stray spaces around and within"
+assert in 1 12 00 "1-5 09:00-22:00;" "trailing semicolon"
+assert in 1 12 00 ";;1-5 09:00-22:00" "leading empty entries"
+assert in 6 12 00 "1-5 09:00-22:00 ; 6 10:00-18:00" "spaces around the semicolon"
+assert out 1 12 00 "1-5" "an entry with no time range is ignored"
+assert out 1 12 00 "garbage" "an unparseable entry is ignored"
 
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
