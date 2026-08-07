@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # <xbar.title>Caffeinate Scheduler</xbar.title>
-# <xbar.version>v1.0.0</xbar.version>
+# <xbar.version>v1.1.0</xbar.version>
 # <xbar.author>yoshitake</xbar.author>
 # <xbar.author.github>take-m</xbar.author.github>
 # <xbar.desc>Keeps macOS awake only while a watched process is running, and only inside the days and hours you configure. Built for Claude Code Remote Control sessions.</xbar.desc>
@@ -16,7 +16,8 @@
 set -u
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
-# SwiftBar の bash= は絶対パスを要求するので、相対パスで起動された場合も解決しておく
+# SwiftBar's bash= needs an absolute path, so resolve one even if we were
+# invoked by a relative path.
 SELF="${SWIFTBAR_PLUGIN_PATH:-$0}"
 case "$SELF" in
     /*) : ;;
@@ -34,32 +35,37 @@ OVERRIDE_FILE="$STATE_DIR/override_until"
 mkdir -p "$CONFIG_DIR" "$STATE_DIR" 2>/dev/null
 
 # ---------------------------------------------------------------------------
-# 設定
+# Configuration
 # ---------------------------------------------------------------------------
 
 write_default_config() {
     cat >"$CONFIG_FILE" <<'DEFAULTS'
-# caffeinate-scheduler の設定
-# 変更後は SwiftBar のメニューから「設定を再読み込み」を選ぶか、次の更新を待つ。
+# caffeinate-scheduler configuration.
+# Changes take effect on the next refresh, or pick "Refresh now" from the menu.
 
-# 監視するプロセス。ps の引数行に対する部分一致を | で区切って列挙する。
-# Claude Code の Remote Control を「すべてのセッションで有効」にしている場合は
-# WATCH_PATTERNS="claude" のように緩めること。
+# Menu language: auto | en | ja
+# "auto" follows the macOS system locale and falls back to English.
+UI_LANGUAGE="auto"
+
+# Processes to watch. Substring matches against the `ps` argument line,
+# separated by |. If you turned on Claude Code Remote Control for all
+# sessions, loosen this to WATCH_PATTERNS="claude".
 WATCH_PATTERNS="claude remote-control|claude --remote-control|claude --rc"
 
-# 有効にする曜日と時間帯。; で複数指定できる。
-# 曜日は date +%u と同じで 1=月 … 7=日。範囲 (1-5) とカンマ (1,3,5) が使える。
-# 開始 > 終了 の場合は日をまたぐ窓として扱う (例 "1-5 22:00-02:00")。
-# 空文字にすると時間帯の制限なし。
+# When the rules are allowed to apply. Separate multiple windows with ;
+# Weekday numbers follow `date +%u`: 1=Mon ... 7=Sun.
+# Ranges (1-5) and lists (1,3,5) both work.
+# If start > end the window wraps past midnight, e.g. "1-5 22:00-02:00".
+# An empty string means no time restriction.
 SCHEDULE="1-5 09:00-22:00"
 
-# 監視プロセスが消えてから抑止を解除するまでの猶予（分）。
+# Keep preventing sleep for this many minutes after the watched process exits.
 GRACE_MINUTES=5
 
-# caffeinate に渡すフラグ。
-#   -i  システムのアイドルスリープを抑止（画面は消える。通常はこれで十分）
-#   -di 画面も点けたままにする
-#   -m  ディスクのスリープも抑止
+# Flags passed to caffeinate.
+#   -i   prevent idle system sleep (display still turns off) - usually enough
+#   -di  also keep the display on
+#   -m   also prevent disk sleep
 CAFFEINATE_FLAGS="-i"
 DEFAULTS
 }
@@ -67,10 +73,102 @@ DEFAULTS
 [ -f "$CONFIG_FILE" ] || write_default_config
 
 # ---------------------------------------------------------------------------
-# スケジュール判定（副作用のない純粋関数）
+# Strings (i18n)
+#
+# To add a language, add one msg_<code> function. Nothing else needs to change:
+# t() falls back to English for any key a catalogue is missing, so a partial
+# translation still renders. tests/test_i18n.py catches missing or stray keys.
 # ---------------------------------------------------------------------------
 
-# 曜日 $1 (1-7) が指定 $2 ("1-5" / "1,3,5" / "1-5,7") に含まれるか
+msg_en() {
+    case "$1" in
+        header_blocking) echo "Keeping this Mac awake" ;;
+        header_idle) echo "Not keeping this Mac awake" ;;
+        reason_override) echo "Override active - %d min left" ;;
+        reason_mode_off) echo "Turned off manually" ;;
+        reason_mode_always) echo "Always on, set manually" ;;
+        reason_outside) echo "Outside the scheduled hours" ;;
+        reason_inside_nowatch) echo "Within schedule, process watching disabled" ;;
+        reason_matched) echo "Matching processes: %d" ;;
+        reason_grace) echo "Grace period - %d min left" ;;
+        reason_no_match) echo "Within schedule, nothing matched" ;;
+        section_matches) echo "Matching processes" ;;
+        label_schedule) echo "Schedule: %s" ;;
+        label_watch) echo "Watching: %s" ;;
+        value_unrestricted) echo "no restriction" ;;
+        value_none) echo "none" ;;
+        mode_auto) echo "Automatic" ;;
+        mode_always) echo "Always on" ;;
+        mode_off) echo "Always off" ;;
+        override_1h) echo "Keep awake for 1 hour" ;;
+        override_3h) echo "Keep awake for 3 hours" ;;
+        override_cancel) echo "Cancel the override" ;;
+        foreign_label) echo "Other caffeinate processes: %s" ;;
+        foreign_stop) echo "Stop all of them" ;;
+        action_edit) echo "Edit configuration" ;;
+        action_reset) echo "Reset configuration" ;;
+        action_refresh) echo "Refresh now" ;;
+    esac
+}
+
+msg_ja() {
+    case "$1" in
+        header_blocking) echo "スリープ抑止中" ;;
+        header_idle) echo "抑止していません" ;;
+        reason_override) echo "一時的に ON - 残り %d 分" ;;
+        reason_mode_off) echo "手動で OFF" ;;
+        reason_mode_always) echo "手動で常時 ON" ;;
+        reason_outside) echo "時間帯外" ;;
+        reason_inside_nowatch) echo "時間帯内、プロセス監視は無効" ;;
+        reason_matched) echo "一致するプロセス %d 件" ;;
+        reason_grace) echo "猶予期間中 - 残り %d 分" ;;
+        reason_no_match) echo "時間帯内だが一致なし" ;;
+        section_matches) echo "パターンに一致するプロセス" ;;
+        label_schedule) echo "スケジュール: %s" ;;
+        label_watch) echo "監視: %s" ;;
+        value_unrestricted) echo "制限なし" ;;
+        value_none) echo "なし" ;;
+        mode_auto) echo "自動" ;;
+        mode_always) echo "常に ON" ;;
+        mode_off) echo "常に OFF" ;;
+        override_1h) echo "今だけ 1 時間 ON" ;;
+        override_3h) echo "今だけ 3 時間 ON" ;;
+        override_cancel) echo "一時 ON を取り消す" ;;
+        foreign_label) echo "他の caffeinate: %s" ;;
+        foreign_stop) echo "すべて停止" ;;
+        action_edit) echo "設定を編集" ;;
+        action_reset) echo "設定を初期化" ;;
+        action_refresh) echo "今すぐ更新" ;;
+    esac
+}
+
+# Guess the language from the macOS system locale.
+detect_lang() {
+    local loc=""
+    loc="$(defaults read -g AppleLocale 2>/dev/null)"
+    [ -n "$loc" ] || loc="${LANG:-}"
+    case "$loc" in
+        ja*) printf 'ja' ;;
+        *) printf 'en' ;;
+    esac
+}
+
+# t <key> [printf arguments...]
+t() {
+    local key="$1" fmt=""
+    shift
+    fmt="$("msg_${UI_LANG:-en}" "$key" 2>/dev/null)"
+    [ -n "$fmt" ] || fmt="$(msg_en "$key")"
+    [ -n "$fmt" ] || fmt="$key"
+    # shellcheck disable=SC2059  # fmt comes from our own catalogue, so it is trusted
+    printf "$fmt" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Schedule evaluation (pure functions, no side effects)
+# ---------------------------------------------------------------------------
+
+# Is weekday $1 (1-7) covered by the spec $2 ("1-5" / "1,3,5" / "1-5,7")?
 day_match() {
     local d="$1" spec="$2" part lo hi old_ifs
     old_ifs="$IFS"
@@ -103,11 +201,12 @@ hhmm_to_min() {
     echo $((10#$hh * 60 + 10#$mm))
 }
 
-# 現在が $SCHEDULE のいずれかの窓の中なら 0 を返す
+# Return 0 if the current time falls inside any window in $SCHEDULE.
 #
-# 注意: ここではコマンド置換 $( ) を使わないこと。macOS 標準の bash 3.2 には
-# $( ) の中に書いた case のパターンの ) をコマンド置換の終端と誤認するバグがあり、
-# 構文エラーになる。ついでに for なら return がそのまま使えてサブシェルも不要。
+# Do not introduce a $( ) command substitution here. macOS ships bash 3.2, whose
+# parser mistakes the ) closing a case pattern inside $( ) for the end of the
+# substitution and raises a syntax error. A plain for loop also lets us return
+# directly instead of round-tripping a result through a subshell.
 in_schedule() {
     [ -z "${SCHEDULE:-}" ] && return 0
 
@@ -121,9 +220,9 @@ in_schedule() {
     for entry in $SCHEDULE; do
         IFS="$old_ifs"
 
-        # 既定の IFS による単語分割で "曜日 開始-終了" に分ける。
-        # 前後や途中の余分な空白はこれで自動的に落ちる。
-        # shellcheck disable=SC2086  # 意図的に単語分割する
+        # Split "days start-end" using default-IFS word splitting, which also
+        # discards any leading, trailing or repeated spaces for free.
+        # shellcheck disable=SC2086  # word splitting is the point here
         set -- $entry
         days="${1:-}"
         range="${2:-}"
@@ -139,7 +238,7 @@ in_schedule() {
                     return 0
                 fi
             else
-                # 日をまたぐ窓
+                # Window wrapping past midnight
                 if day_match "$dow" "$days" && [ "$now_min" -ge "$fmin" ]; then
                     IFS="$old_ifs"
                     return 0
@@ -158,14 +257,15 @@ in_schedule() {
     return 1
 }
 
-# tests/ から関数だけを読み込むためのフック
+# Hook that lets tests/ source the pure functions without running the plugin.
 if [ -n "${CAFFEINATE_SCHEDULER_LIB_ONLY:-}" ]; then
     # shellcheck disable=SC2317
     return 0 2>/dev/null || exit 0
 fi
 
 # ---------------------------------------------------------------------------
-# メニューから呼ばれるアクション（設定を読む前に処理できるものはここで返す）
+# Actions invoked from the menu. Anything that does not need the config file
+# is handled here and returns early.
 # ---------------------------------------------------------------------------
 
 case "${1:-}" in
@@ -204,11 +304,17 @@ SCHEDULE="${SCHEDULE:-}"
 GRACE_MINUTES="${GRACE_MINUTES:-5}"
 CAFFEINATE_FLAGS="${CAFFEINATE_FLAGS:--i}"
 
+# Pick the display language. Anything other than en/ja falls back to detection.
+case "${UI_LANGUAGE:-auto}" in
+    en | ja) UI_LANG="${UI_LANGUAGE}" ;;
+    *) UI_LANG="$(detect_lang)" ;;
+esac
+
 MODE="auto"
 [ -f "$MODE_FILE" ] && MODE="$(cat "$MODE_FILE")"
 
 # ---------------------------------------------------------------------------
-# プロセス監視
+# Process watching
 # ---------------------------------------------------------------------------
 
 PS_SNAPSHOT="$(ps -Ao pid=,args=)"
@@ -236,7 +342,7 @@ MATCH_COUNT=0
 [ -n "$MATCHES" ] && MATCH_COUNT="$(printf '%s\n' "$MATCHES" | wc -l | tr -d ' ')"
 
 # ---------------------------------------------------------------------------
-# caffeinate の起動・停止
+# Starting and stopping caffeinate
 # ---------------------------------------------------------------------------
 
 our_pid() {
@@ -267,18 +373,18 @@ stop_block() {
 }
 
 # ---------------------------------------------------------------------------
-# 判定
+# Decide
 # ---------------------------------------------------------------------------
 
 NOW="$(date +%s)"
-SHOULD_BLOCK=1 # 0 = 抑止する
+SHOULD_BLOCK=1 # 0 = prevent sleep
 REASON=""
 
 if [ -f "$OVERRIDE_FILE" ]; then
     UNTIL="$(cat "$OVERRIDE_FILE")"
     if [ "$NOW" -lt "$UNTIL" ]; then
         SHOULD_BLOCK=0
-        REASON="一時的に ON（あと $(((UNTIL - NOW) / 60 + 1)) 分）"
+        REASON="$(t reason_override $(((UNTIL - NOW) / 60 + 1)))"
     else
         rm -f "$OVERRIDE_FILE"
     fi
@@ -288,34 +394,34 @@ if [ -z "$REASON" ]; then
     case "$MODE" in
         off)
             SHOULD_BLOCK=1
-            REASON="手動で OFF"
+            REASON="$(t reason_mode_off)"
             ;;
         always)
             SHOULD_BLOCK=0
-            REASON="手動で常時 ON"
+            REASON="$(t reason_mode_always)"
             ;;
         *)
             MODE="auto"
             if ! in_schedule; then
                 SHOULD_BLOCK=1
-                REASON="時間帯外"
+                REASON="$(t reason_outside)"
             elif [ -z "$WATCH_PATTERNS" ]; then
                 SHOULD_BLOCK=0
-                REASON="時間帯内（プロセス監視なし）"
+                REASON="$(t reason_inside_nowatch)"
             elif [ "$MATCH_COUNT" -gt 0 ]; then
                 printf '%s' "$NOW" >"$SEEN_FILE"
                 SHOULD_BLOCK=0
-                REASON="対象プロセス ${MATCH_COUNT} 件を検出"
+                REASON="$(t reason_matched "$MATCH_COUNT")"
             else
                 LAST_SEEN=0
                 [ -f "$SEEN_FILE" ] && LAST_SEEN="$(cat "$SEEN_FILE")"
                 ELAPSED=$((NOW - LAST_SEEN))
                 if [ "$LAST_SEEN" -gt 0 ] && [ "$ELAPSED" -lt $((GRACE_MINUTES * 60)) ]; then
                     SHOULD_BLOCK=0
-                    REASON="猶予期間中（あと $(((GRACE_MINUTES * 60 - ELAPSED) / 60 + 1)) 分）"
+                    REASON="$(t reason_grace $(((GRACE_MINUTES * 60 - ELAPSED) / 60 + 1)))"
                 else
                     SHOULD_BLOCK=1
-                    REASON="時間帯内だが対象プロセスなし"
+                    REASON="$(t reason_no_match)"
                 fi
             fi
             ;;
@@ -328,7 +434,7 @@ else
     stop_block
 fi
 
-# 自分以外の caffeinate（ターミナルや他アプリが起動したもの）
+# caffeinate processes we did not start (terminal, other apps)
 OUR="$(our_pid)"
 FOREIGN=""
 for pid in $(pgrep -x caffeinate 2>/dev/null); do
@@ -338,7 +444,7 @@ done
 FOREIGN="$(printf '%s' "$FOREIGN" | sed 's/^ //')"
 
 # ---------------------------------------------------------------------------
-# 出力
+# Output
 # ---------------------------------------------------------------------------
 
 check() { [ "$1" = "$MODE" ] && echo "true" || echo "false"; }
@@ -361,9 +467,9 @@ fi
 echo "---"
 
 if [ "$SHOULD_BLOCK" -eq 0 ]; then
-    echo "スリープ抑止中 | color=#c98a3a"
+    echo "$(t header_blocking) | color=#c98a3a"
 else
-    echo "抑止していません | color=#8a8a8a"
+    echo "$(t header_idle) | color=#8a8a8a"
 fi
 echo "$REASON | size=12"
 
@@ -373,36 +479,38 @@ fi
 
 if [ "$MATCH_COUNT" -gt 0 ]; then
     echo "---"
-    echo "パターンに一致するプロセス | size=12"
+    echo "$(t section_matches) | size=12"
     printf '%s\n' "$MATCHES" | head -n 8 | while IFS= read -r line; do
+        # | separates a menu item from its parameters, so any | inside a command
+        # line has to be swapped for the fullwidth form to survive display.
         echo "${line//|/｜} | size=11 font=Menlo length=60"
     done
 fi
 
 echo "---"
-echo "スケジュール: ${SCHEDULE:-制限なし} | size=12"
-echo "監視: ${WATCH_PATTERNS:-なし} | size=12 length=50"
+echo "$(t label_schedule "${SCHEDULE:-$(t value_unrestricted)}") | size=12"
+echo "$(t label_watch "${WATCH_PATTERNS:-$(t value_none)}") | size=12 length=50"
 
 echo "---"
-echo "自動 | $act param1=mode param2=auto checked=$(check auto)"
-echo "常に ON | $act param1=mode param2=always checked=$(check always)"
-echo "常に OFF | $act param1=mode param2=off checked=$(check off)"
+echo "$(t mode_auto) | $act param1=mode param2=auto checked=$(check auto)"
+echo "$(t mode_always) | $act param1=mode param2=always checked=$(check always)"
+echo "$(t mode_off) | $act param1=mode param2=off checked=$(check off)"
 
 echo "---"
 if [ -f "$OVERRIDE_FILE" ]; then
-    echo "一時 ON を取り消す | $act param1=clear-override"
+    echo "$(t override_cancel) | $act param1=clear-override"
 else
-    echo "今だけ 1 時間 ON | $act param1=override param2=60"
-    echo "今だけ 3 時間 ON | $act param1=override param2=180 alternate=true"
+    echo "$(t override_1h) | $act param1=override param2=60"
+    echo "$(t override_3h) | $act param1=override param2=180 alternate=true"
 fi
 
 if [ -n "$FOREIGN" ]; then
     echo "---"
-    echo "他の caffeinate: $FOREIGN | size=12"
-    echo "すべて停止 | $act param1=kill-foreign"
+    echo "$(t foreign_label "$FOREIGN") | size=12"
+    echo "$(t foreign_stop) | $act param1=kill-foreign"
 fi
 
 echo "---"
-echo "設定を編集 | $act param1=edit"
-echo "設定を初期化 | $act param1=reset-config alternate=true"
-echo "今すぐ更新 | refresh=true"
+echo "$(t action_edit) | $act param1=edit"
+echo "$(t action_reset) | $act param1=reset-config alternate=true"
+echo "$(t action_refresh) | refresh=true"

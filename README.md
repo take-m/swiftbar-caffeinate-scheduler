@@ -5,14 +5,15 @@ A [SwiftBar](https://github.com/swiftbar/SwiftBar) plugin that keeps macOS awake
 Originally built for [Claude Code](https://code.claude.com) Remote Control sessions: the Mac should stay awake while a session is reachable from a phone, but go back to sleeping normally outside working hours.
 
 ```
-☕️  →  対象プロセス 1 件を検出
-💤  →  時間帯外
+☕️  →  Matching processes: 1
+💤  →  Outside the scheduled hours
 ```
 
 - Menu bar icon shows whether sleep is currently being prevented, and why
 - Auto / always-on / always-off, switchable from the menu
 - One-off "keep awake for the next hour" override
 - Detects `caffeinate` processes started elsewhere (terminal, other apps) and can stop them
+- Menu in English or Japanese, following your system locale by default
 - Wraps Apple's own `caffeinate(1)`. No kexts, no extra permissions, no daemons
 
 ## Requirements
@@ -25,7 +26,7 @@ Originally built for [Claude Code](https://code.claude.com) Remote Control sessi
 
 ```bash
 curl -o "$(defaults read com.ameba.SwiftBar PluginDirectory)/caffeinate-scheduler.30s.sh" \
-  https://raw.githubusercontent.com/take-m/swiftbar-caffeinate-scheduler/main/caffeinate-scheduler.30s.sh
+  https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/swiftbar-caffeinate-scheduler/main/caffeinate-scheduler.30s.sh
 chmod +x "$(defaults read com.ameba.SwiftBar PluginDirectory)/caffeinate-scheduler.30s.sh"
 ```
 
@@ -35,9 +36,12 @@ The `30s` in the filename is the refresh interval, which is also how often the r
 
 ## Configuration
 
-On first run the plugin writes `~/.config/caffeinate-scheduler/config.sh`. Edit it from the menu (**設定を編集**) or directly:
+On first run the plugin writes `~/.config/caffeinate-scheduler/config.sh`. Edit it from the menu (**Edit configuration**) or directly:
 
 ```bash
+# Menu language: auto | en | ja. "auto" follows the macOS system locale.
+UI_LANGUAGE="auto"
+
 # Processes to watch. Substring matches against the `ps` argument line, separated by |.
 WATCH_PATTERNS="claude remote-control|claude --remote-control|claude --rc"
 
@@ -68,6 +72,12 @@ WATCH_PATTERNS="claude"
 
 The trade-off is false positives: anything with `claude` in its command line (`grep claude`, an editor with the string in a filename) will match. Narrow it back down if that becomes annoying.
 
+### Menu language
+
+`UI_LANGUAGE` accepts `auto`, `en`, or `ja`. On `auto` the plugin reads `defaults read -g AppleLocale`, falls back to `$LANG`, and settles on English if neither says Japanese. Anything unrecognised in the config falls back to `auto` rather than erroring.
+
+Adding a language means adding one `msg_<code>()` function to the plugin — nothing else. `t()` falls back to English for any key a catalogue is missing, so a partial translation still renders. `tests/test_i18n.py` checks that every catalogue has the same keys and the same `printf` format specifiers, and that no key is defined but unused.
+
 ## How it works
 
 SwiftBar standard plugins are stateless — they run, print, and exit. So instead of holding state in a daemon, every refresh performs a full reconcile:
@@ -79,18 +89,20 @@ SwiftBar standard plugins are stateless — they run, print, and exit. So instea
 
 A side effect is self-healing: if the `caffeinate` child is killed by anything, the next refresh notices and restarts it.
 
-State lives in `$SWIFTBAR_PLUGIN_DATA_PATH` (mode, override deadline, PID of the managed `caffeinate`, last time the watched process was seen). The plugin only ever kills the `caffeinate` it started itself, unless you explicitly choose **すべて停止**.
+State lives in `$SWIFTBAR_PLUGIN_DATA_PATH` (mode, override deadline, PID of the managed `caffeinate`, last time the watched process was seen). The plugin only ever kills the `caffeinate` it started itself, unless you explicitly choose **Stop all of them**.
 
 ## Limitations
 
 - **Closed lid.** `caffeinate` prevents *idle* sleep. A MacBook with the lid shut still sleeps. Defeating that needs `sudo pmset -a disablesleep 1`, which requires root, so it is deliberately out of scope here.
 - **Substring matching.** `WATCH_PATTERNS` is matched against the full `ps` argument line with `grep -F`. It is simple and dependency-free, not precise.
-- **Up to one refresh interval of lag.** Starting a session does not instantly prevent sleep; the next refresh does. Use the **今だけ 1 時間 ON** override if you need it immediately.
+- **Up to one refresh interval of lag.** Starting a session does not instantly prevent sleep; the next refresh does. Use the **Keep awake for 1 hour** override if you need it immediately.
 
 ## Development
 
 ```bash
 ./tests/test_schedule.sh                       # schedule parsing and window matching
+./tests/test_i18n.py caffeinate-scheduler.30s.sh   # translation catalogue parity
+./tests/test_version.sh                        # version numbers agree
 ./tests/lint_bash32.py *.sh tests/*.sh         # bash 3.2 compatibility
 shellcheck -x *.sh tests/*.sh
 shfmt -d -i 4 -ci *.sh tests/*.sh

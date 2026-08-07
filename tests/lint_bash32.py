@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""macOS 標準の bash 3.2 で壊れる構文を検出する。
+"""Detect syntax that breaks under the bash 3.2 macOS ships.
 
-macOS には bash 3.2.57 (2007年) しか同梱されておらず、SwiftBar プラグインは
-それで動く必要がある。ShellCheck はバージョン差のこの手の落とし穴までは
-見てくれないので、既知のものをここで潰す。
+macOS has bundled nothing newer than bash 3.2.57 (2007), and SwiftBar runs
+plugins through it, so the plugin has to stay compatible. ShellCheck does not
+flag version-specific traps like these, so this catches the known ones.
 
     ./tests/lint_bash32.py caffeinate-scheduler.30s.sh
 """
@@ -11,27 +11,27 @@ macOS には bash 3.2.57 (2007年) しか同梱されておらず、SwiftBar プ
 import re
 import sys
 
-# $( ) の中に case のパターンを書くと、閉じ括弧がコマンド置換の終端と
-# 誤認されて "syntax error near unexpected token" になる。
-# 例: result="$( ... case "$x" in *-*) ... esac ... )"
+# A case pattern inside $( ) makes the 3.2 parser mistake the pattern's closing
+# paren for the end of the substitution: "syntax error near unexpected token".
+# For example: result="$( ... case "$x" in *-*) ... esac ... )"
 CASE_IN_SUBST = "case-in-command-substitution"
 
-# ${var#"${var%%...}"} のような入れ子のクォート付きパラメータ展開。
+# Nested quoted parameter expansion such as ${var#"${var%%...}"}.
 NESTED_QUOTED_EXPANSION = re.compile(r'\$\{[^{}]*"\$\{')
 
-# bash 4 以降でしか使えない機能。
+# Features that only exist in bash 4 and later.
 BASH4_FEATURES = [
-    (re.compile(r"\bdeclare\s+-A\b"), "連想配列 (declare -A) は bash 4 以降"),
-    (re.compile(r"\bmapfile\b|\breadarray\b"), "mapfile/readarray は bash 4 以降"),
-    (re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\^\^"), "${var^^} は bash 4 以降"),
-    (re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*,,"), "${var,,} は bash 4 以降"),
-    (re.compile(r"&>>"), "&>> は bash 4 以降"),
-    (re.compile(r"\|&"), "|& は bash 4 以降"),
+    (re.compile(r"\bdeclare\s+-A\b"), "associative arrays (declare -A) need bash 4"),
+    (re.compile(r"\bmapfile\b|\breadarray\b"), "mapfile/readarray need bash 4"),
+    (re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\^\^"), "${var^^} needs bash 4"),
+    (re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*,,"), "${var,,} needs bash 4"),
+    (re.compile(r"&>>"), "&>> needs bash 4"),
+    (re.compile(r"\|&"), "|& needs bash 4"),
 ]
 
 
 def find_case_in_substitution(text):
-    """$( ) の内側に case キーワードが現れる箇所の行番号を返す。"""
+    """Return the line numbers where a case keyword appears inside $( )."""
     hits = []
     i = 0
     n = len(text)
@@ -62,11 +62,19 @@ def check(path):
     problems = []
 
     for line in find_case_in_substitution(text):
-        problems.append((line, CASE_IN_SUBST, "$( ) の中の case は bash 3.2 で構文エラーになる"))
+        problems.append(
+            (line, CASE_IN_SUBST, "case inside $( ) is a syntax error in bash 3.2")
+        )
 
     for match in NESTED_QUOTED_EXPANSION.finditer(text):
         line = text.count("\n", 0, match.start()) + 1
-        problems.append((line, "nested-quoted-expansion", "入れ子のクォート付き展開は bash 3.2 で挙動が異なる"))
+        problems.append(
+            (
+                line,
+                "nested-quoted-expansion",
+                "nested quoted expansion behaves differently in bash 3.2",
+            )
+        )
 
     for pattern, message in BASH4_FEATURES:
         for match in pattern.finditer(text):

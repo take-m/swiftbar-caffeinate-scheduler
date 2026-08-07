@@ -22,7 +22,7 @@ every 30 seconds:
   matching process list is rendered into the menu, so avoid patterns that would
   surface secrets passed as command-line arguments.
 - **It starts and stops `/usr/bin/caffeinate`.** It tracks the PID of the
-  process it started and only kills that one. The "すべて停止" menu item is the
+  process it started and only kills that one. The "Stop all of them" menu item is the
   single exception: it runs `pkill -x caffeinate`, which terminates every
   `caffeinate` on the system, including ones started by other tools.
 - **It requires no elevated privileges.** If anything ever asks you for `sudo`
