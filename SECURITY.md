@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report security issues privately through GitHub's
-[private vulnerability reporting](https://github.com/YOUR_GITHUB_USERNAME/swiftbar-caffeinate-scheduler/security/advisories/new)
+[private vulnerability reporting](https://github.com/take-m/swiftbar-caffeinate-scheduler/security/advisories/new)
 rather than opening a public issue. I aim to respond within a week.
 
 ## What this plugin does on your machine
