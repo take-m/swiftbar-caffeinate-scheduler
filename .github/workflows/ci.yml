@@ -6,12 +6,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 既定を最小権限にする。書き込みが要るジョブはそのジョブで明示的に足すこと。
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: ShellCheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Run shellcheck
         run: shellcheck -x ./*.sh tests/*.sh
       - name: Check for bash 3.2 incompatibilities
@@ -20,13 +26,22 @@ jobs:
   format:
     name: shfmt
     runs-on: ubuntu-latest
+    env:
+      # renovate: datasource=github-releases depName=mvdan/sh
+      SHFMT_VERSION: 3.13.1
+      SHFMT_SHA256: fb096c5d1ac6beabbdbaa2874d025badb03ee07929f0c9ff67563ce8c75398b1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install shfmt
         run: |
-          curl -sSfL -o /usr/local/bin/shfmt \
-            https://github.com/mvdan/sh/releases/download/v3.10.0/shfmt_v3.10.0_linux_amd64
-          chmod +x /usr/local/bin/shfmt
+          set -euo pipefail
+          curl -sSfL -o /tmp/shfmt \
+            "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64"
+          echo "${SHFMT_SHA256}  /tmp/shfmt" | sha256sum -c -
+          chmod +x /tmp/shfmt
+          sudo mv /tmp/shfmt /usr/local/bin/shfmt
       - name: Check formatting
         run: shfmt -d -i 4 -ci ./*.sh tests/*.sh
 
@@ -34,22 +49,25 @@ jobs:
     name: Tests
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Show bash version
         run: bash --version | head -n 1
       - name: Run schedule tests
         run: ./tests/test_schedule.sh
       - name: Smoke test the plugin output
+        env:
+          RUNNER_TEMP_DIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
-          export XDG_CONFIG_HOME="$RUNNER_TEMP/config"
-          export SWIFTBAR_PLUGIN_DATA_PATH="$RUNNER_TEMP/state"
+          export XDG_CONFIG_HOME="$RUNNER_TEMP_DIR/config"
+          export SWIFTBAR_PLUGIN_DATA_PATH="$RUNNER_TEMP_DIR/state"
           out="$(./caffeinate-scheduler.30s.sh </dev/null)"
           printf '%s\n' "$out"
-          # ヘッダとセパレータが出ていること
           printf '%s\n' "$out" | grep -q -- '---'
-          # 既定の設定ファイルが生成されていること
           test -f "$XDG_CONFIG_HOME/caffeinate-scheduler/config.sh"
