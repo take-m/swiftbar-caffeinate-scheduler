@@ -7,6 +7,7 @@
 # <xbar.desc>Keeps macOS awake only while a watched process is running, and only inside the days and hours you configure. Built for Claude Code Remote Control sessions.</xbar.desc>
 # <xbar.dependencies>bash</xbar.dependencies>
 # <xbar.abouturl>https://github.com/take-m/swiftbar-caffeinate-scheduler</xbar.abouturl>
+# <xbar.image>https://raw.githubusercontent.com/take-m/swiftbar-caffeinate-scheduler/main/docs/caffeinate-scheduler-on.png</xbar.image>
 #
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>
