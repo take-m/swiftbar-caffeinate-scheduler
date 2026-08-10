@@ -4,10 +4,9 @@ A [SwiftBar](https://github.com/swiftbar/SwiftBar) plugin that keeps macOS awake
 
 Originally built for [Claude Code](https://code.claude.com) Remote Control sessions: the Mac should stay awake while a session is reachable from a phone, but go back to sleeping normally outside working hours.
 
-```
-☕️  →  Matching processes: 1
-💤  →  Outside the scheduled hours
-```
+| ☕️ Keeping the Mac awake | 💤 Not keeping the Mac awake |
+| --- | --- |
+| ![Menu while a watched process is running: "Keeping this Mac awake", matching process and schedule shown](docs/caffeinate-scheduler-on.png) | ![Menu while turned off manually: "Not keeping this Mac awake"](docs/caffeinate-scheduler-off.png) |
 
 - Menu bar icon shows whether sleep is currently being prevented, and why
 - Auto / always-on / always-off, switchable from the menu
