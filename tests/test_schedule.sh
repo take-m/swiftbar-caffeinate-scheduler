@@ -124,6 +124,45 @@ assert in 6 12 00 "1-5 09:00-22:00 ; 6 10:00-18:00" "spaces around the semicolon
 assert out 1 12 00 "1-5" "an entry with no time range is ignored"
 assert out 1 12 00 "garbage" "an unparseable entry is ignored"
 
+echo "power_gate"
+# assert_gate <gate|pass> <require_ac> <floor> <source> <pct> <description> [reason]
+assert_gate() {
+    local expect="$1" req="$2" floor="$3" src="$4" pct="$5" desc="$6" want_reason="${7:-}"
+
+    local actual="pass"
+    POWER_GATE_REASON=""
+    if power_gate "$req" "$floor" "$src" "$pct"; then actual="gate"; fi
+
+    if [ "$actual" != "$expect" ]; then
+        FAIL=$((FAIL + 1))
+        printf '  FAIL  %s  (expected %s, got %s)\n' "$desc" "$expect" "$actual"
+    elif [ -n "$want_reason" ] && [ "$POWER_GATE_REASON" != "$want_reason" ]; then
+        FAIL=$((FAIL + 1))
+        printf '  FAIL  %s  (expected reason %s, got "%s")\n' \
+            "$desc" "$want_reason" "$POWER_GATE_REASON"
+    else
+        PASS=$((PASS + 1))
+        printf '  ok    %s\n' "$desc"
+    fi
+}
+
+assert_gate pass false 0 battery 5 "everything disabled never gates"
+assert_gate pass false 0 ac 100 "everything disabled on AC never gates"
+
+assert_gate gate true 0 battery 80 "REQUIRE_AC gates on battery power" no_ac
+assert_gate pass true 0 ac 80 "REQUIRE_AC passes on AC power"
+
+assert_gate gate false 20 battery 19 "below the floor on battery gates" battery_low
+assert_gate pass false 20 battery 20 "exactly at the floor does not gate"
+assert_gate pass false 20 battery 21 "above the floor does not gate"
+assert_gate pass false 20 ac 10 "below the floor on AC does not gate"
+assert_gate pass false 20 battery "" "unknown percentage does not gate"
+
+assert_gate gate true 20 battery 50 "REQUIRE_AC is reported before the floor" no_ac
+
+assert_gate pass false garbage battery 5 "a non-numeric floor is ignored"
+assert_gate pass false 20 "" 10 "an unknown power source does not gate"
+
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

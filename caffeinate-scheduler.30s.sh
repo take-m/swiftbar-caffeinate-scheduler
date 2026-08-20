@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # <xbar.title>Caffeinate Scheduler</xbar.title>
-# <xbar.version>v1.1.0</xbar.version>
+# <xbar.version>v1.2.0</xbar.version>
 # <xbar.author>yoshitake</xbar.author>
 # <xbar.author.github>take-m</xbar.author.github>
 # <xbar.desc>Keeps macOS awake only while a watched process is running, and only inside the days and hours you configure. Built for Claude Code Remote Control sessions.</xbar.desc>
@@ -63,6 +63,13 @@ SCHEDULE="1-5 09:00-22:00"
 # Keep preventing sleep for this many minutes after the watched process exits.
 GRACE_MINUTES=5
 
+# Only prevent sleep while the Mac is on AC power.
+REQUIRE_AC=false
+
+# While on battery, stop preventing sleep once the charge drops below this
+# percentage. 0 disables the check. Example: BATTERY_FLOOR=20
+BATTERY_FLOOR=0
+
 # Flags passed to caffeinate.
 #   -i   prevent idle system sleep (display still turns off) - usually enough
 #   -di  also keep the display on
@@ -93,6 +100,8 @@ msg_en() {
         reason_matched) echo "Matching processes: %d" ;;
         reason_grace) echo "Grace period - %d min left" ;;
         reason_no_match) echo "Within schedule, nothing matched" ;;
+        reason_no_ac) echo "Not on AC power" ;;
+        reason_battery_low) echo "Battery at %d%% - below the %d%% floor" ;;
         section_matches) echo "Matching processes" ;;
         label_schedule) echo "Schedule: %s" ;;
         label_watch) echo "Watching: %s" ;;
@@ -124,6 +133,8 @@ msg_ja() {
         reason_matched) echo "一致するプロセス %d 件" ;;
         reason_grace) echo "猶予期間中 - 残り %d 分" ;;
         reason_no_match) echo "時間帯内だが一致なし" ;;
+        reason_no_ac) echo "AC 電源に未接続" ;;
+        reason_battery_low) echo "バッテリー残量 %d%% - 下限 %d%% 未満" ;;
         section_matches) echo "パターンに一致するプロセス" ;;
         label_schedule) echo "スケジュール: %s" ;;
         label_watch) echo "監視: %s" ;;
@@ -258,6 +269,35 @@ in_schedule() {
     return 1
 }
 
+# power_gate <require_ac> <battery_floor> <power_source> <battery_pct>
+#
+# Return 0 when the power state forbids preventing sleep, setting
+# POWER_GATE_REASON to "no_ac" or "battery_low". <power_source> is "ac" or
+# "battery"; <battery_pct> may be empty when the charge level is unknown.
+# The floor only applies on battery power: on AC the battery is charging,
+# so a low reading is not a reason to give the machine back its sleep.
+POWER_GATE_REASON=""
+power_gate() {
+    local req="$1" floor="$2" src="$3" pct="$4"
+    POWER_GATE_REASON=""
+    [ "$src" = "battery" ] || return 1
+    if [ "$req" = "true" ]; then
+        POWER_GATE_REASON="no_ac"
+        return 0
+    fi
+    case "$floor" in
+        '' | *[!0-9]*) return 1 ;;
+    esac
+    case "$pct" in
+        '' | *[!0-9]*) return 1 ;;
+    esac
+    if [ "$floor" -gt 0 ] && [ "$pct" -lt "$floor" ]; then
+        POWER_GATE_REASON="battery_low"
+        return 0
+    fi
+    return 1
+}
+
 # Hook that lets tests/ source the pure functions without running the plugin.
 if [ -n "${CAFFEINATE_SCHEDULER_LIB_ONLY:-}" ]; then
     # shellcheck disable=SC2317
@@ -304,6 +344,11 @@ WATCH_PATTERNS="${WATCH_PATTERNS:-}"
 SCHEDULE="${SCHEDULE:-}"
 GRACE_MINUTES="${GRACE_MINUTES:-5}"
 CAFFEINATE_FLAGS="${CAFFEINATE_FLAGS:--i}"
+REQUIRE_AC="${REQUIRE_AC:-false}"
+BATTERY_FLOOR="${BATTERY_FLOOR:-0}"
+case "$BATTERY_FLOOR" in
+    '' | *[!0-9]*) BATTERY_FLOOR=0 ;;
+esac
 
 # Pick the display language. Anything other than en/ja falls back to detection.
 case "${UI_LANGUAGE:-auto}" in
@@ -374,6 +419,29 @@ stop_block() {
 }
 
 # ---------------------------------------------------------------------------
+# Power state
+# ---------------------------------------------------------------------------
+
+# Snapshot pmset once, mirroring the ps snapshot above. Anything short of a
+# confirmed battery reading (a desktop Mac, pmset failing) is treated as
+# "on AC, charge unknown", which keeps the gates quiet.
+POWER_SOURCE="ac"
+BATTERY_PCT=""
+
+read_power_state() {
+    local batt
+    batt="$(pmset -g batt 2>/dev/null)" || return 0
+    if printf '%s' "$batt" | grep -q "Battery Power"; then
+        POWER_SOURCE="battery"
+    fi
+    BATTERY_PCT="$(printf '%s\n' "$batt" | grep -o '[0-9]*%' | head -n 1 | tr -d '%')"
+}
+
+if [ "$REQUIRE_AC" = "true" ] || [ "$BATTERY_FLOOR" -gt 0 ]; then
+    read_power_state
+fi
+
+# ---------------------------------------------------------------------------
 # Decide
 # ---------------------------------------------------------------------------
 
@@ -381,7 +449,17 @@ NOW="$(date +%s)"
 SHOULD_BLOCK=1 # 0 = prevent sleep
 REASON=""
 
-if [ -f "$OVERRIDE_FILE" ]; then
+# The power gates outrank everything, manual modes and overrides included:
+# draining the battery is the one thing the plugin must never win against.
+if power_gate "$REQUIRE_AC" "$BATTERY_FLOOR" "$POWER_SOURCE" "$BATTERY_PCT"; then
+    SHOULD_BLOCK=1
+    case "$POWER_GATE_REASON" in
+        battery_low) REASON="$(t reason_battery_low "$BATTERY_PCT" "$BATTERY_FLOOR")" ;;
+        *) REASON="$(t reason_no_ac)" ;;
+    esac
+fi
+
+if [ -z "$REASON" ] && [ -f "$OVERRIDE_FILE" ]; then
     UNTIL="$(cat "$OVERRIDE_FILE")"
     if [ "$NOW" -lt "$UNTIL" ]; then
         SHOULD_BLOCK=0
