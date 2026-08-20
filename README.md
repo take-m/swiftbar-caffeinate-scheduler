@@ -11,6 +11,7 @@ Originally built for [Claude Code](https://code.claude.com) Remote Control sessi
 - Menu bar icon shows whether sleep is currently being prevented, and why
 - Auto / always-on / always-off, switchable from the menu
 - One-off "keep awake for the next hour" override
+- Optional battery guard: require AC power, or back off below a charge floor
 - Detects `caffeinate` processes started elsewhere (terminal, other apps) and can stop them
 - Menu in English or Japanese, following your system locale by default
 - Wraps Apple's own `caffeinate(1)`. No kexts, no extra permissions, no daemons
@@ -53,6 +54,13 @@ SCHEDULE="1-5 09:00-22:00"
 # Keep preventing sleep for this many minutes after the watched process disappears.
 GRACE_MINUTES=5
 
+# Only prevent sleep while the Mac is on AC power.
+REQUIRE_AC=false
+
+# While on battery, stop preventing sleep once the charge drops below this
+# percentage. 0 disables the check.
+BATTERY_FLOOR=0
+
 # Flags passed to caffeinate.
 #   -i   prevent idle system sleep (display still turns off) — usually what you want
 #   -di  also keep the display on
@@ -71,6 +79,14 @@ WATCH_PATTERNS="claude"
 
 The trade-off is false positives: anything with `claude` in its command line (`grep claude`, an editor with the string in a filename) will match. Narrow it back down if that becomes annoying.
 
+### Battery guard
+
+`REQUIRE_AC` and `BATTERY_FLOOR` read `pmset -g batt` and outrank every other rule, including **Always on** and the temporary overrides — protecting the battery is the point, so nothing overrides them.
+
+- `REQUIRE_AC=true` releases sleep prevention whenever the Mac runs on battery power
+- `BATTERY_FLOOR=20` releases it once the battery drops below 20% — but only while discharging; on AC power the battery is charging, so the floor does not apply
+- On a Mac without a battery, or if the power state cannot be read, both checks stay quiet
+
 ### Menu language
 
 `UI_LANGUAGE` accepts `auto`, `en`, or `ja`. On `auto` the plugin reads `defaults read -g AppleLocale`, falls back to `$LANG`, and settles on English if neither says Japanese. Anything unrecognised in the config falls back to `auto` rather than erroring.
@@ -82,7 +98,7 @@ Adding a language means adding one `msg_<code>()` function to the plugin — not
 SwiftBar standard plugins are stateless — they run, print, and exit. So instead of holding state in a daemon, every refresh performs a full reconcile:
 
 1. Read config and the current mode
-2. Decide whether sleep should be prevented right now (override → mode → schedule → process match → grace period)
+2. Decide whether sleep should be prevented right now (power gates → override → mode → schedule → process match → grace period)
 3. Compare against reality and start or stop `caffeinate` accordingly
 4. Print the menu
 

@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-20
+
+### Added
+
+- `REQUIRE_AC` config option: when `true`, sleep is only prevented while the
+  Mac is on AC power
+- `BATTERY_FLOOR` config option: while on battery, sleep prevention stops once
+  the charge drops below this percentage (0 disables the check)
+- Both power gates outrank every other rule, including the manual always-on
+  mode and temporary overrides. On AC power the floor does not apply, since
+  the battery is charging. Macs without a battery are unaffected
+
 ## [1.1.0] - 2026-08-07
 
 ### Added
