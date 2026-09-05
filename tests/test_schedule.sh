@@ -33,6 +33,7 @@ MOCK_DOW=1
 MOCK_HH=12
 MOCK_MM=00
 
+# shellcheck disable=SC2317,SC2329  # Mock invoked indirectly by sourced functions.
 date() {
     case "${1:-}" in
         +%u) echo "$MOCK_DOW" ;;
@@ -162,6 +163,90 @@ assert_gate gate true 20 battery 50 "REQUIRE_AC is reported before the floor" no
 
 assert_gate pass false garbage battery 5 "a non-numeric floor is ignored"
 assert_gate pass false 20 "" 10 "an unknown power source does not gate"
+
+echo "schedule end notifications"
+# Use a fixed UTC Monday; bridge BSD date -r on Linux CI.
+export TZ=UTC
+unset -f date
+date() {
+    if [ "${1:-}" = "-r" ] && [ "$(uname -s)" != Darwin ]; then
+        command date -d "@$2" "$3"
+    else
+        command date "$@"
+    fi
+}
+assert_end() {
+    local now="$1" sched="$2" lead="$3" expected="$4" desc="$5" actual
+    # shellcheck disable=SC2034  # schedule_end_soon reads this
+    SCHEDULE="$sched"
+    actual="$(schedule_end_soon "$now" "$lead")"
+    if [ "$actual" = "$expected" ]; then
+        PASS=$((PASS + 1))
+        printf '  ok    %s\n' "$desc"
+    else
+        FAIL=$((FAIL + 1))
+        printf '  FAIL  %s (expected %s, got %s)\n' "$desc" "$expected" "$actual"
+    fi
+}
+# 2026-08-31 22:00 UTC
+END=1788213600
+assert_end "$((END - 300))" "1-5 09:00-22:00" 5 "$END" "exact warning threshold"
+assert_end "$((END - 301))" "1-5 09:00-22:00" 5 "" "before warning threshold"
+assert_end "$((END - 29))" "1-5 09:00-22:00" 5 "$END" "late refresh still warns"
+assert_end "$END" "1-5 09:00-22:00" 5 "" "no warning after end"
+assert_end "$((END - 300))" "1-5 09:00-22:00;1-5 21:00-23:00" 5 "" "overlapping window continues"
+assert_end "$((END - 300))" "1-5 09:00-22:00;1-5 22:00-23:00" 5 "" "adjacent window continues"
+assert_end "$((END - 300))" "" 5 "" "unrestricted schedule"
+assert_end "$((END - 300))" "1-5 09:00-22:00" 0 "" "notifications disabled"
+assert_end "$((END + 14400 - 300))" "1-5 22:00-02:00" 5 "$((END + 14400))" "overnight window end"
+assert_end "$((END + 7200 - 300))" "1 22:00-00:00;2 00:00-02:00" 5 "" "adjacent windows across midnight"
+
+# Stub delivery: repeated and concurrent refreshes claim only once.
+# shellcheck disable=SC2317,SC2329  # Mock invoked indirectly by notify_schedule_end.
+osascript() {
+    printf 'sent\n' >>"$TMP/deliveries"
+    cat >/dev/null
+}
+notify_schedule_end "$END" 5
+notify_schedule_end "$END" 4
+notify_schedule_end "$((END + 86400))" 5 &
+notify_schedule_end "$((END + 86400))" 5 &
+wait
+if [ "$(wc -l <"$TMP/deliveries" | tr -d ' ')" = 2 ]; then
+    PASS=$((PASS + 1))
+    echo "  ok    one delivery per deadline, including concurrent refreshes"
+else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL  duplicate or missing delivery"
+fi
+
+# A failed delivery remains claimed instead of spamming every refresh.
+# shellcheck disable=SC2317,SC2329  # Mock invoked indirectly by notify_schedule_end.
+osascript() { return 1; }
+notify_schedule_end "$((END + 172800))" 5
+# shellcheck disable=SC2317,SC2329  # Mock invoked indirectly by notify_schedule_end.
+osascript() { echo unexpected >>"$TMP/deliveries"; }
+notify_schedule_end "$((END + 172800))" 4
+if [ "$(wc -l <"$TMP/deliveries" | tr -d ' ')" = 2 ]; then
+    PASS=$((PASS + 1))
+    echo "  ok    failed delivery is not retried"
+else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL  failed delivery was retried"
+fi
+
+FUTURE=$(($(date +%s) + 3600))
+CAFFEINATE_SCHEDULER_LIB_ONLY='' /bin/bash "$PLUGIN" extend "$FUTURE"
+if [ "$(cat "$OVERRIDE_FILE")" = "$FUTURE" ] &&
+    ! CAFFEINATE_SCHEDULER_LIB_ONLY='' /bin/bash "$PLUGIN" extend 1 &&
+    ! CAFFEINATE_SCHEDULER_LIB_ONLY='' /bin/bash "$PLUGIN" extend invalid &&
+    [ "$(cat "$OVERRIDE_FILE")" = "$FUTURE" ]; then
+    PASS=$((PASS + 1))
+    echo "  ok    extension persists deadline and rejects expired or invalid actions"
+else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL  extension action"
+fi
 
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"

@@ -54,6 +54,9 @@ SCHEDULE="1-5 09:00-22:00"
 # Keep preventing sleep for this many minutes after the watched process disappears.
 GRACE_MINUTES=5
 
+# Warn before the schedule ends (0 disables, maximum 60 minutes).
+NOTIFY_BEFORE_MINUTES=5
+
 # Only prevent sleep while the Mac is on AC power.
 REQUIRE_AC=false
 
@@ -78,6 +81,26 @@ WATCH_PATTERNS="claude"
 ```
 
 The trade-off is false positives: anything with `claude` in its command line (`grep claude`, an editor with the string in a filename) will match. Narrow it back down if that becomes annoying.
+
+### Schedule end notification
+
+While Automatic mode is keeping the Mac awake, a notification appears within
+5 minutes of the end of the schedule. Open the menu bar cup and choose
+**Extend 1 hour past the scheduled end** (22:00 → 23:00). Ignoring the notice
+keeps the original end time. The extension uses the existing temporary override
+and still respects battery guards.
+
+`NOTIFY_BEFORE_MINUTES` defaults to 5, including for existing configs; set it to
+0 to disable or 1–60 to adjust. Overlapping and adjacent windows count as one
+continuous window. No warning is sent for Always on/off, an active override,
+an unrestricted schedule, or while sleep prevention is inactive.
+
+Each end time is claimed in persistent state before sending, so refreshes and
+mode changes do not repeat it. Delivery failures are not retried for that end
+time. macOS notification settings and Focus can suppress the banner.
+AppleScript notifications do not support custom action buttons: extension is
+available in the plugin menu, on the Mac, rather than in the notification or
+Remote Control session. Detection follows the normal 30-second refresh interval.
 
 ### Battery guard
 

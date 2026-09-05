@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # <xbar.title>Caffeinate Scheduler</xbar.title>
-# <xbar.version>v1.2.0</xbar.version>
+# <xbar.version>v1.3.0</xbar.version>
 # <xbar.author>yoshitake</xbar.author>
 # <xbar.author.github>take-m</xbar.author.github>
 # <xbar.desc>Keeps macOS awake only while a watched process is running, and only inside the days and hours you configure. Built for Claude Code Remote Control sessions.</xbar.desc>
@@ -32,6 +32,7 @@ PID_FILE="$STATE_DIR/caffeinate.pid"
 MODE_FILE="$STATE_DIR/mode"
 SEEN_FILE="$STATE_DIR/last_seen"
 OVERRIDE_FILE="$STATE_DIR/override_until"
+NOTIFIED_FILE="$STATE_DIR/notified_until"
 
 mkdir -p "$CONFIG_DIR" "$STATE_DIR" 2>/dev/null
 
@@ -62,6 +63,9 @@ SCHEDULE="1-5 09:00-22:00"
 
 # Keep preventing sleep for this many minutes after the watched process exits.
 GRACE_MINUTES=5
+
+# Notify before the schedule ends (minutes). 0 disables notifications.
+NOTIFY_BEFORE_MINUTES=5
 
 # Only prevent sleep while the Mac is on AC power.
 REQUIRE_AC=false
@@ -110,6 +114,9 @@ msg_en() {
         mode_auto) echo "Automatic" ;;
         mode_always) echo "Always on" ;;
         mode_off) echo "Always off" ;;
+        notification_ending) echo "Sleep prevention ends in %d min. Open the menu bar cup to extend." ;;
+        schedule_ending) echo "Schedule ends in %d min" ;;
+        extend_1h) echo "Extend 1 hour past the scheduled end" ;;
         override_1h) echo "Keep awake for 1 hour" ;;
         override_3h) echo "Keep awake for 3 hours" ;;
         override_cancel) echo "Cancel the override" ;;
@@ -143,6 +150,9 @@ msg_ja() {
         mode_auto) echo "自動" ;;
         mode_always) echo "常に ON" ;;
         mode_off) echo "常に OFF" ;;
+        notification_ending) echo "まもなく抑止を解除します（残り %d 分）。延長するにはメニューバーのカップを開いてください。" ;;
+        schedule_ending) echo "スケジュール終了まで %d 分" ;;
+        extend_1h) echo "終了時刻から 1 時間延長" ;;
         override_1h) echo "今だけ 1 時間 ON" ;;
         override_3h) echo "今だけ 3 時間 ON" ;;
         override_cancel) echo "一時 ON を取り消す" ;;
@@ -223,8 +233,8 @@ in_schedule() {
     [ -z "${SCHEDULE:-}" ] && return 0
 
     local dow now_min prev entry days range fmin tmin old_ifs
-    dow="$(date +%u)"
-    now_min=$((10#$(date +%H) * 60 + 10#$(date +%M)))
+    dow="${1:-$(date +%u)}"
+    now_min="${2:-$((10#$(date +%H) * 60 + 10#$(date +%M)))}"
     prev=$((dow == 1 ? 7 : dow - 1))
 
     old_ifs="$IFS"
@@ -267,6 +277,44 @@ in_schedule() {
 
     IFS="$old_ifs"
     return 1
+}
+
+# Find the first uncovered minute within the notification horizon. Checking
+# the union of windows avoids warning at overlapping or adjacent boundaries.
+# Epoch arithmetic plus local date conversion also handles DST transitions.
+schedule_end_soon() {
+    local now="$1" lead="$2" candidate parts
+    [ -n "${SCHEDULE:-}" ] && [ "$lead" -gt 0 ] || return 1
+    parts="$(date -r "$now" '+%u %H %M')" || return 1
+    # shellcheck disable=SC2086
+    set -- $parts
+    in_schedule "$1" "$((10#$2 * 60 + 10#$3))" || return 1
+    candidate=$((now / 60 * 60 + 60))
+    while [ "$candidate" -le "$((now + lead * 60))" ]; do
+        parts="$(date -r "$candidate" '+%u %H %M')" || return 1
+        # shellcheck disable=SC2086
+        set -- $parts
+        if ! in_schedule "$1" "$((10#$2 * 60 + 10#$3))"; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+        candidate=$((candidate + 60))
+    done
+    return 1
+}
+
+# Claim a deadline atomically before sending: concurrent refreshes must not
+# duplicate notifications. Retain the claim even if delivery fails or is muted.
+notify_schedule_end() {
+    local deadline="$1" remaining="$2" claimed
+    claimed="$NOTIFIED_FILE.$deadline"
+    mkdir "$claimed" 2>/dev/null || return 0
+    printf '%s' "$deadline" >"$NOTIFIED_FILE"
+    osascript - "$(t notification_ending "$remaining")" <<'APPLESCRIPT' >/dev/null 2>&1
+on run argv
+    display notification (item 1 of argv) with title "Caffeinate Scheduler"
+end run
+APPLESCRIPT
 }
 
 # power_gate <require_ac> <battery_floor> <power_source> <battery_pct>
@@ -327,6 +375,14 @@ case "${1:-}" in
         date -v"+${2:-60}M" +%s >"$OVERRIDE_FILE"
         exit 0
         ;;
+    extend)
+        case "${2:-}" in
+            '' | *[!0-9]*) exit 1 ;;
+        esac
+        [ "$2" -gt "$(date +%s)" ] || exit 1
+        printf '%s' "$2" >"$OVERRIDE_FILE"
+        exit 0
+        ;;
     clear-override)
         rm -f "$OVERRIDE_FILE"
         exit 0
@@ -345,6 +401,13 @@ SCHEDULE="${SCHEDULE:-}"
 GRACE_MINUTES="${GRACE_MINUTES:-5}"
 CAFFEINATE_FLAGS="${CAFFEINATE_FLAGS:--i}"
 REQUIRE_AC="${REQUIRE_AC:-false}"
+NOTIFY_BEFORE_MINUTES="${NOTIFY_BEFORE_MINUTES:-5}"
+case "$NOTIFY_BEFORE_MINUTES" in
+    '' | *[!0-9]*) NOTIFY_BEFORE_MINUTES=5 ;;
+esac
+# Bound work per refresh and normalize leading zeroes.
+NOTIFY_BEFORE_MINUTES=$((10#$NOTIFY_BEFORE_MINUTES))
+[ "$NOTIFY_BEFORE_MINUTES" -le 60 ] || NOTIFY_BEFORE_MINUTES=60
 BATTERY_FLOOR="${BATTERY_FLOOR:-0}"
 case "$BATTERY_FLOOR" in
     '' | *[!0-9]*) BATTERY_FLOOR=0 ;;
@@ -513,6 +576,24 @@ else
     stop_block
 fi
 
+ENDING=""
+if [ "$SHOULD_BLOCK" -eq 0 ] && [ "$MODE" = "auto" ] && [ ! -f "$OVERRIDE_FILE" ]; then
+    ENDING="$(schedule_end_soon "$NOW" "$NOTIFY_BEFORE_MINUTES")"
+    if [ -n "$ENDING" ]; then
+        REMAINING=$(((ENDING - NOW + 59) / 60))
+        notify_schedule_end "$ENDING" "$REMAINING"
+    fi
+fi
+# Remove expired claims; today's claim survives mode changes and overrides.
+for claim in "$NOTIFIED_FILE".*; do
+    [ -d "$claim" ] || continue
+    deadline="${claim##*.}"
+    case "$deadline" in
+        '' | *[!0-9]*) continue ;;
+    esac
+    [ "$deadline" -ge "$NOW" ] || rmdir "$claim" 2>/dev/null
+done
+
 # caffeinate processes we did not start (terminal, other apps)
 OUR="$(our_pid)"
 FOREIGN=""
@@ -551,6 +632,10 @@ else
     echo "$(t header_idle) | color=#8a8a8a"
 fi
 echo "$REASON | size=12"
+if [ -n "$ENDING" ]; then
+    echo "$(t schedule_ending "$REMAINING") | color=#c98a3a"
+    echo "$(t extend_1h) | $act param1=extend param2=$((ENDING + 3600))"
+fi
 
 if [ "$SHOULD_BLOCK" -eq 0 ] && is_our_caffeinate_alive; then
     echo "caffeinate $CAFFEINATE_FLAGS  (PID $(our_pid)) | size=11 font=Menlo"

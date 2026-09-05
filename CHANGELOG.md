@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-05
+
+### Added
+
+- Schedule end notifications, defaulting to 5 minutes before the end, with
+  persistent deduplication and English/Japanese messages
+- Menu action to extend sleep prevention until one hour after the scheduled end
+- `NOTIFY_BEFORE_MINUTES` configuration (0 disables; maximum 60 minutes)
+
 ## [1.2.0] - 2026-08-20
 
 ### Added
