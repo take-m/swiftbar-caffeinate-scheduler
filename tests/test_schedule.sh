@@ -10,7 +10,6 @@
 # Run it with /bin/bash explicitly to exercise bash 3.2, which is what macOS
 # ships and therefore what SwiftBar runs the plugin under.
 #
-# shellcheck disable=SC2329  # Mocks are called indirectly by sourced functions.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -34,6 +33,7 @@ MOCK_DOW=1
 MOCK_HH=12
 MOCK_MM=00
 
+# shellcheck disable=SC2317,SC2329  # Mock invoked indirectly by sourced functions.
 date() {
     case "${1:-}" in
         +%u) echo "$MOCK_DOW" ;;
@@ -202,6 +202,7 @@ assert_end "$((END + 14400 - 300))" "1-5 22:00-02:00" 5 "$((END + 14400))" "over
 assert_end "$((END + 7200 - 300))" "1 22:00-00:00;2 00:00-02:00" 5 "" "adjacent windows across midnight"
 
 # Stub delivery: repeated and concurrent refreshes claim only once.
+# shellcheck disable=SC2317,SC2329  # Mock invoked indirectly by notify_schedule_end.
 osascript() {
     printf 'sent\n' >>"$TMP/deliveries"
     cat >/dev/null
@@ -220,8 +221,10 @@ else
 fi
 
 # A failed delivery remains claimed instead of spamming every refresh.
+# shellcheck disable=SC2317,SC2329  # Mock invoked indirectly by notify_schedule_end.
 osascript() { return 1; }
 notify_schedule_end "$((END + 172800))" 5
+# shellcheck disable=SC2317,SC2329  # Mock invoked indirectly by notify_schedule_end.
 osascript() { echo unexpected >>"$TMP/deliveries"; }
 notify_schedule_end "$((END + 172800))" 4
 if [ "$(wc -l <"$TMP/deliveries" | tr -d ' ')" = 2 ]; then
